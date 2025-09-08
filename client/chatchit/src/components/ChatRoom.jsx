@@ -1,7 +1,7 @@
 // client/src/components/ChatRoom.jsx
 import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { setHistory } from '../store';
+import { setHistory, addMessage } from '../store';
 import { socket } from '../socket';
 
 export default function ChatRoom() {
@@ -22,12 +22,34 @@ export default function ChatRoom() {
   }, [roomId, dispatch]);
 
   const send = async () => {
-    await fetch(`http://localhost:4000/api/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, userId: user?.id, text })
-    });
-    setText('');
+    const trimmed = text.trim();
+    if (!roomId) {
+      console.error('No room selected');
+      return;
+    }
+    if (!user?.id) {
+      console.error('No user');
+      return;
+    }
+    if (!trimmed) return; // don't send empty messages
+
+    try {
+      const clientId = `c_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      const res = await fetch(`http://localhost:4000/api/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, userId: user.id, text: trimmed, clientId })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Send failed: ${res.status} ${errText}`);
+      }
+      // Optimistic update in case changefeed latency/drops (deduped via clientId)
+      dispatch(addMessage({ roomId, userId: user.id, text: trimmed, createdAt: new Date().toISOString(), clientId }));
+      setText('');
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   if (!roomId) return <div>Chọn phòng để bắt đầu</div>;
@@ -57,7 +79,7 @@ export default function ChatRoom() {
         ))}
       </div>
       <div style={{display:'flex', gap:8, padding:20, borderTop:'1px solid #eee', background:'#fff'}}>
-        <input value={text} onChange={e=>setText(e.target.value)} style={{
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } }} style={{
           flex:1,
           padding:'10px 14px',
           border:'1px solid #ddd',

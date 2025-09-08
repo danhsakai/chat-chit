@@ -26,12 +26,11 @@ router.get("/:roomId", async (req, res) => {
 
 // Gửi tin nhắn (đồng thời DB changefeed sẽ đẩy realtime)
 router.post("/", async (req, res) => {
-  const { roomId, userId, text } = req.body;
+  const { roomId, userId, text, clientId } = req.body;
   const now = DB.r.now();
-  const result = await DB.r
-    .table("messages")
-    .insert({ roomId, userId, text, createdAt: now })
-    .run(DB.conn);
+  const payload = { roomId, userId, text, createdAt: now };
+  if (clientId) payload.clientId = clientId; // persist clientId for dedupe on client
+  const result = await DB.r.table("messages").insert(payload).run(DB.conn);
   res.json({ inserted: result.inserted });
 });
 

@@ -21,7 +21,7 @@ router.get("/", async (req, res, next) => {
 // POST /api/rooms  -> tạo phòng mới
 router.post("/", async (req, res, next) => {
   try {
-    const { name } = req.body;
+    const { name, avatar } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
 
     const r = DB.r,
@@ -29,7 +29,7 @@ router.post("/", async (req, res, next) => {
     const now = r.now();
     const result = await r
       .table("rooms")
-      .insert({ name, createdAt: now })
+      .insert({ name, avatar, createdAt: now })
       .run(conn);
 
     // id tự sinh có trong generated_keys (theo driver JS của RethinkDB)
@@ -56,15 +56,21 @@ router.get("/:id", async (req, res, next) => {
 // PUT /api/rooms/:id -> đổi tên phòng
 router.put("/:id", async (req, res, next) => {
   try {
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: "name is required" });
+    const { name, avatar } = req.body;
+    if (!name && !avatar)
+      return res.status(400).json({ error: "nothing to update" });
 
     const r = DB.r,
       conn = DB.conn;
     const result = await r
       .table("rooms")
       .get(req.params.id)
-      .update({ name })
+      .update((row) => {
+        const update = {};
+        if (name) update.name = name;
+        if (avatar !== undefined) update.avatar = avatar;
+        return update;
+      })
       .run(conn);
 
     if (result.skipped || result.replaced === 0) {

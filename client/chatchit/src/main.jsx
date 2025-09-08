@@ -7,7 +7,7 @@ import App from './App'
 import { socket } from './socket'
 import { createSocketMiddleware } from './socketMiddleware'
 import { configureStore } from '@reduxjs/toolkit'
-
+import '../styles/main.css';
 const enhancedStore = configureStore({
   reducer: rootReducer, // use the actual root reducer
   middleware: (getDefault) => getDefault().concat(createSocketMiddleware(socket))

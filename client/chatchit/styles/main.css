@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  /* App primary colors */
+  --color-appbg-950: #202022;
+  --color-foreground-50: #f9fafc;
+
+  --color-primary-500: #7678ed; /* main brand */
+  --color-primary-600: #7678ed; /* fallback same tone */
+
+  --color-accent-500: #ff7a55; /* secondary accent */
+  --text-body: 1.1rem;
+  --text-h2: 28px;
+  --shadow-primary-glow: 0 8px 20px rgba(118, 120, 237, 0.35);
+
+  /* Light UI tokens */
+  --color-surface: #ffffff;
+  --color-text-900: #202022;
+
+  --text-button-size: 1.1rem;
+}
+
+/* Optional: app-specific tweaks can go below */
+:root {
+  font-family: system-ui, "Source Sans Pro", Helvetica, Arial, sans-serif;
+}
+
+/* Simple entrance animation */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

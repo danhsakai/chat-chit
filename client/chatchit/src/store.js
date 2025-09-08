@@ -19,13 +19,30 @@ const authSlice = createSlice({
 
 const roomsSlice = createSlice({
   name: "rooms",
-  initialState: { list: [], current: null },
+  initialState: { list: [], current: null, unread: {}, lastReadAt: {} },
   reducers: {
     setRooms(state, action) {
       state.list = action.payload;
     },
     setCurrentRoom(state, action) {
       state.current = action.payload;
+    },
+    setUserRoomsState(state, action) {
+      const { unread = {}, lastReadAt = {} } = action.payload || {};
+      state.unread = { ...state.unread, ...unread };
+      state.lastReadAt = { ...state.lastReadAt, ...lastReadAt };
+    },
+    incrementUnread(state, action) {
+      const roomId = action.payload;
+      state.unread[roomId] = (state.unread[roomId] || 0) + 1;
+    },
+    resetUnread(state, action) {
+      const roomId = action.payload;
+      state.unread[roomId] = 0;
+    },
+    setLastReadAt(state, action) {
+      const { roomId, ts } = action.payload;
+      state.lastReadAt[roomId] = ts || new Date().toISOString();
     },
   },
 });
@@ -40,13 +57,17 @@ const messagesSlice = createSlice({
     },
     addMessage(state, action) {
       const m = action.payload;
-      (state.byRoom[m.roomId] ||= []).push(m);
+      const list = (state.byRoom[m.roomId] ||= []);
+      if (m.clientId && list.some((x) => x.clientId === m.clientId)) {
+        return; // dedupe by client-generated id
+      }
+      list.push(m);
     },
   },
 });
 
 export const { setAuth, logout } = authSlice.actions;
-export const { setRooms, setCurrentRoom } = roomsSlice.actions;
+export const { setRooms, setCurrentRoom, setUserRoomsState, incrementUnread, resetUnread, setLastReadAt } = roomsSlice.actions;
 export const { setHistory, addMessage } = messagesSlice.actions;
 
 const rootReducer = combineReducers({
