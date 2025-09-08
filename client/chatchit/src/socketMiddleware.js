@@ -1,5 +1,5 @@
 // client/src/socketMiddleware.js
-import { addMessage, incrementUnread } from "./store";
+import { addMessage, incrementUnread, upsertUserRoomRead } from "./store";
 
 export const createSocketMiddleware = (socket) => (store) => {
   // lắng nghe sự kiện từ server và dispatch
@@ -12,6 +12,13 @@ export const createSocketMiddleware = (socket) => (store) => {
     if (msg.roomId !== currentRoom && msg.userId !== me) {
       store.dispatch(incrementUnread(msg.roomId));
     }
+  });
+
+  // read receipt updates from server
+  socket.on("room:read", (payload) => {
+    const { roomId, userId, lastReadAt } = payload || {};
+    if (!roomId || !userId) return;
+    store.dispatch(upsertUserRoomRead({ roomId, userId, lastReadAt }));
   });
 
   return (next) => (action) => next(action);

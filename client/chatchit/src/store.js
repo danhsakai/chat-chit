@@ -19,7 +19,7 @@ const authSlice = createSlice({
 
 const roomsSlice = createSlice({
   name: "rooms",
-  initialState: { list: [], current: null, unread: {}, lastReadAt: {} },
+  initialState: { list: [], current: null, unread: {}, lastReadAt: {}, readByRoom: {} },
   reducers: {
     setRooms(state, action) {
       state.list = action.payload;
@@ -44,6 +44,22 @@ const roomsSlice = createSlice({
       const { roomId, ts } = action.payload;
       state.lastReadAt[roomId] = ts || new Date().toISOString();
     },
+    setRoomReadStates(state, action) {
+      const { roomId, states } = action.payload || {};
+      if (!roomId || !Array.isArray(states)) return;
+      const map = {};
+      for (const s of states) {
+        if (!s || !s.userId) continue;
+        map[s.userId] = s.lastReadAt || null;
+      }
+      state.readByRoom[roomId] = map;
+    },
+    upsertUserRoomRead(state, action) {
+      const { roomId, userId, lastReadAt } = action.payload || {};
+      if (!roomId || !userId) return;
+      const roomMap = (state.readByRoom[roomId] ||= {});
+      roomMap[userId] = lastReadAt || new Date().toISOString();
+    },
   },
 });
 
@@ -67,7 +83,7 @@ const messagesSlice = createSlice({
 });
 
 export const { setAuth, logout } = authSlice.actions;
-export const { setRooms, setCurrentRoom, setUserRoomsState, incrementUnread, resetUnread, setLastReadAt } = roomsSlice.actions;
+export const { setRooms, setCurrentRoom, setUserRoomsState, incrementUnread, resetUnread, setLastReadAt, setRoomReadStates, upsertUserRoomRead } = roomsSlice.actions;
 export const { setHistory, addMessage } = messagesSlice.actions;
 
 const rootReducer = combineReducers({

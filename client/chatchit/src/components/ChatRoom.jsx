@@ -1,5 +1,5 @@
 // client/src/components/ChatRoom.jsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setHistory, addMessage } from '../store';
 import { socket } from '../socket';
@@ -17,6 +17,12 @@ export default function ChatRoom() {
   const [userMap, setUserMap] = useState({}); // id -> { id, name, avatar }
   const [openViewerKey, setOpenViewerKey] = useState(null);
   const [viewerList, setViewerList] = useState([]);
+  const listRef = useRef(null);
+  const endRef = useRef(null);
+  const fileInputRef = useRef(null);
+  // Preview modal state for sending media like Telegram
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewItems, setPreviewItems] = useState([]); // [{ file, url, caption }]
 
   const room = useMemo(() => rooms.find(r => r.id === roomId) || null, [rooms, roomId]);
 
@@ -29,6 +35,21 @@ export default function ChatRoom() {
       .then(r => r.json())
       .then(msgs => dispatch(setHistory({ roomId, messages: msgs })));
   }, [roomId, dispatch]);
+
+  // Auto scroll to bottom when messages update or room changes
+  useEffect(() => {
+    const el = endRef.current;
+    if (el) {
+      // use requestAnimationFrame to ensure layout updated
+      requestAnimationFrame(() => {
+        try {
+          el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } catch (_) {
+          el.scrollIntoView();
+        }
+      });
+    }
+  }, [messages.length, roomId]);
 
   // Fetch member count when room changes
   useEffect(() => {
@@ -163,10 +184,84 @@ export default function ChatRoom() {
       // Optimistic update in case changefeed latency/drops (deduped via clientId)
       dispatch(addMessage({ roomId, userId: user.id, text: trimmed, createdAt: new Date().toISOString(), clientId }));
       setText('');
+      // ensure scrolled to bottom after sending quickly
+      if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
     } catch (e) {
       console.error(e);
     }
   };
+
+  const uploadAndSendFiles = async (items) => {
+    const list = (items || []).map((it) => (it && it.file) ? it : ({ file: it, caption: '' }));
+    if (!list.length) return;
+    for (const { file, caption } of list) {
+      try {
+        // Upload binary
+        const up = await fetch(`http://localhost:4000/api/uploads/${encodeURIComponent(roomId)}?filename=${encodeURIComponent(file.name)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file,
+        });
+        if (!up.ok) throw new Error(`Upload failed: ${up.status}`);
+        const meta = await up.json();
+        const kind = (file.type || '').startsWith('image/') ? 'image' : 'file';
+        const clientId = `c_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+        // Create message referencing uploaded file URL
+        const payload = {
+          roomId,
+          userId: user.id,
+          clientId,
+          type: kind,
+          url: `http://localhost:4000${meta.url}`,
+          fileName: meta.fileName || file.name,
+          fileSize: meta.size || file.size,
+          mime: meta.mime || file.type,
+        };
+        const captionText = (caption || '').trim();
+        if (captionText) payload.text = captionText;
+        const res = await fetch(`http://localhost:4000/api/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Send file message failed: ${res.status}`);
+        // optimistic append
+        dispatch(addMessage({ ...payload, createdAt: new Date().toISOString() }));
+        if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  function openPreviewWithFiles(files) {
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
+    const items = arr.map((f) => ({ file: f, url: URL.createObjectURL(f), caption: '' }));
+    setPreviewItems(items);
+    setPreviewOpen(true);
+  }
+
+  function removePreviewItem(idx) {
+    const items = [...previewItems];
+    const [spliced] = items.splice(idx, 1);
+    if (spliced?.url) URL.revokeObjectURL(spliced.url);
+    setPreviewItems(items);
+    if (items.length === 0) setPreviewOpen(false);
+  }
+
+  function closePreview() {
+    for (const it of previewItems) { if (it?.url) URL.revokeObjectURL(it.url); }
+    setPreviewItems([]);
+    setPreviewOpen(false);
+  }
+
+  async function confirmSendPreview() {
+    const items = previewItems.map(({ file, caption }) => ({ file, caption }));
+    closePreview();
+    await uploadAndSendFiles(items);
+    if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
 
   if (!roomId) return <div>Chọn phòng để bắt đầu</div>;
 
@@ -177,9 +272,9 @@ export default function ChatRoom() {
         {/* Left: Name + stats */}
         <div className="flex items-center gap-3 min-w-0">
           {room?.avatar ? (
-            <img src={room.avatar} alt={room?.name || 'room'} className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200" />
+            <img src={room.avatar} alt={room?.name || 'room'} className="w-10 h-10 rounded-lg object-cover ring-1 ring-slate-200" />
           ) : (
-            <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-bold text-slate-700">
+            <div className="w-10 h-10 rounded-lg bg-slate-200 flex items-center justify-center font-bold text-slate-700">
               {(room?.name || '#').slice(0,1).toUpperCase()}
             </div>
           )}
@@ -214,7 +309,7 @@ export default function ChatRoom() {
         </div>
       </div>
 
-      <div className="overflow-auto p-6 bg-white shadow-sm">
+      <div ref={listRef} className="overflow-auto p-6 bg-white shadow-sm">
         {messages.map((m, idx) => {
           const mine = m.userId === user?.id;
           const createdMs = toMs(m.createdAt);
@@ -235,44 +330,126 @@ export default function ChatRoom() {
 
           const Avatar = (
             showAvatar ? (
-              <img src={avatarSrc} alt={profile.name} className="w-9 h-9 rounded-full object-cover ring-1 ring-slate-200 shrink-0" />
+              <img src={avatarSrc} alt={profile.name} className="w-9 h-9 rounded-lg object-cover ring-1 ring-slate-200 shrink-0" />
             ) : (
               <div className="w-9 h-9 shrink-0" />
             )
           );
 
           const Bubble = (
-            <div className={`rounded-2xl px-3 py-2.5 max-w-[70%] shadow-sm text-[15px] flex flex-col gap-1.5 ${mine ? 'bg-[#7678ed] text-[#f9fafc]' : 'bg-[#eeeffa] text-[#202022]'}`}>
-              {!mine && (
-                <div className="font-bold text-[13px]" style={{ color: nameColor }}>
-                  {profile.name}
+            m.type === 'image' && m.url ? (
+              (() => {
+                const hasCaption = !!(m.text && String(m.text).trim().length > 0);
+                return (
+                  <div className="inline-block max-w-[70%] rounded-2xl p-2" style={{ background: '#7678ed', color: '#f9fafc' }}>
+                    <div className="relative">
+                      <a href={m.url} target="_blank" rel="noreferrer" className="block">
+                        <img src={m.url} alt={m.fileName || 'image'} className="block max-w-full max-h-[420px] rounded-xl object-cover" />
+                      </a>
+                      {!hasCaption ? (
+                        <div className="absolute bottom-1 right-2 flex items-center gap-2 text-[12px]">
+                          <button
+                            onClick={async () => {
+                              const key = m.id || `${m.roomId}-${m.createdAt}-${m.userId}`;
+                              if (openViewerKey === key) { setOpenViewerKey(null); return; }
+                              const eligible = readStates.filter(rs => rs.userId !== m.userId && toMs(rs.lastReadAt) >= createdMs);
+                              const ids = eligible.map(e => e.userId);
+                              await ensureUsers(ids);
+                              const list = eligible.map(e => ({ ...e, user: userMap[e.userId] || { id: e.userId, name: e.userId } }))
+                                .sort((a,b) => toMs(b.lastReadAt) - toMs(a.lastReadAt));
+                              setViewerList(list);
+                              setOpenViewerKey(key);
+                            }}
+                            title={`${viewers} viewed`}
+                            className="text-[0.9rem] inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0"
+                            style={{ color: '#ffffff', textShadow: '0 1px 2px rgba(0,0,0,0.6)' }}
+                          >
+                            <svg className="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                              <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            {viewers}
+                          </button>
+                          <span className="text-[0.9rem] preview-text" style={{ color: '#ffffff', textShadow: '0 1px 2px rgba(0,0,0,0.6)' }}>{hhmm(m.createdAt)}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                    {hasCaption ? (
+                      <>
+                        <div className="mt-1 text-[15px] whitespace-pre-wrap break-words" style={{ color: '#f9fafc' }}>
+                          {m.text}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs justify-end" style={{ color: '#f9fafc' }}>
+                          <button onClick={async () => {
+                            const key = m.id || `${m.roomId}-${m.createdAt}-${m.userId}`;
+                            if (openViewerKey === key) { setOpenViewerKey(null); return; }
+                            const eligible = readStates.filter(rs => rs.userId !== m.userId && toMs(rs.lastReadAt) >= createdMs);
+                            const ids = eligible.map(e => e.userId);
+                            await ensureUsers(ids);
+                            const list = eligible.map(e => ({ ...e, user: userMap[e.userId] || { id: e.userId, name: e.userId } }))
+                              .sort((a,b) => toMs(b.lastReadAt) - toMs(a.lastReadAt));
+                            setViewerList(list);
+                            setOpenViewerKey(key);
+                          }} title={`${viewers} viewed`} className="text-[0.9rem] inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0">
+                            <svg className="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                              <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            {viewers}
+                          </button>
+                          <span className="text-[0.9rem] preview-text">{hhmm(m.createdAt)}</span>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })()
+            ) : (
+              <div className={`rounded-2xl px-3 py-2.5 max-w-[70%] shadow-sm text-[15px] flex flex-col gap-1.5 ${mine ? 'bg-[#7678ed] text-[#f9fafc]' : 'bg-[#eeeffa] text-[#202022]'}`}>
+                {!mine && (
+                  <div className="font-bold text-[15px]" style={{ color: nameColor }}>
+                    {profile.name}
+                  </div>
+                )}
+                {/* message content: text and/or attachment */}
+                {m.type === 'file' && m.url ? (
+                  <a href={m.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-2 py-1 rounded border border-slate-200 bg-white/50 text-[14px]">
+                    <svg className="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                    <span className="truncate max-w-[260px]">{m.fileName || 'file'}</span>
+                    {m.fileSize ? <span className="text-xs text-slate-500">({Math.ceil((m.fileSize)/1024)} KB)</span> : null}
+                  </a>
+                ) : null}
+                {m.text ? (
+                  <div className="text-body whitespace-pre-wrap break-words">
+                    {m.text}
+                  </div>
+                ) : null}
+                <div className="flex items-center gap-2 self-end text-xs" style={{ color: metaColor }}>
+                  {/* viewers */}
+                  <button onClick={async () => {
+                    const key = m.id || `${m.roomId}-${m.createdAt}-${m.userId}`;
+                    if (openViewerKey === key) { setOpenViewerKey(null); return; }
+                    const eligible = readStates.filter(rs => rs.userId !== m.userId && toMs(rs.lastReadAt) >= createdMs);
+                    const ids = eligible.map(e => e.userId);
+                    await ensureUsers(ids);
+                    const list = eligible.map(e => ({ ...e, user: userMap[e.userId] || { id: e.userId, name: e.userId } }))
+                      .sort((a,b) => toMs(b.lastReadAt) - toMs(a.lastReadAt));
+                    setViewerList(list);
+                    setOpenViewerKey(key);
+                  }} title={`${viewers} viewed`} className="text-[0.9rem] inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0">
+                    <svg className="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    {viewers}
+                  </button>
+                  <span className="text-[0.9rem] preview-text">{hhmm(m.createdAt)}</span>
                 </div>
-              )}
-              <div className="whitespace-pre-wrap break-words">
-                {m.text}
               </div>
-              <div className="flex items-center gap-2 self-end text-xs" style={{ color: metaColor }}>
-                {/* viewers */}
-                <button onClick={async () => {
-                  const key = m.id || `${m.roomId}-${m.createdAt}-${m.userId}`;
-                  if (openViewerKey === key) { setOpenViewerKey(null); return; }
-                  const eligible = readStates.filter(rs => rs.userId !== m.userId && toMs(rs.lastReadAt) >= createdMs);
-                  const ids = eligible.map(e => e.userId);
-                  await ensureUsers(ids);
-                  const list = eligible.map(e => ({ ...e, user: userMap[e.userId] || { id: e.userId, name: e.userId } }))
-                    .sort((a,b) => toMs(b.lastReadAt) - toMs(a.lastReadAt));
-                  setViewerList(list);
-                  setOpenViewerKey(key);
-                }} title={`${viewers} viewed`} className="inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0">
-                  <svg className="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
-                  {viewers}
-                </button>
-                <span>{hhmm(m.createdAt)}</span>
-              </div>
-            </div>
+            )
           );
 
           return (
@@ -292,26 +469,78 @@ export default function ChatRoom() {
             </div>
           );
         })}
+        <div ref={endRef} />
       </div>
+      {/* Media preview modal (Telegram-like) */}
+      {previewOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={closePreview}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200">
+              <div className="font-semibold text-slate-900">Send media</div>
+              <button onClick={closePreview} className="p-1 text-slate-700 hover:text-slate-900" aria-label="Close">✕</button>
+            </div>
+            <div className="p-4 grid gap-4" style={{ gridTemplateColumns: previewItems.length > 1 ? 'repeat(auto-fill, minmax(160px, 1fr))' : '1fr' }}>
+              {previewItems.map((it, idx) => {
+                const isImage = (it.file.type || '').startsWith('image/');
+                return (
+                  <div key={idx} className="relative group border border-slate-200 rounded-lg overflow-hidden">
+                    <button onClick={() => removePreviewItem(idx)} className="absolute top-2 right-2 z-10 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100">✕</button>
+                    {isImage ? (
+                      <img src={it.url} alt={it.file.name} className="block w-full max-h-[420px] object-contain bg-black" />
+                    ) : (
+                      <div className="p-3 flex items-center gap-2">
+                        <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                        </svg>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-slate-900 truncate max-w-[260px]">{it.file.name}</div>
+                          <div className="text-xs text-slate-500">{Math.ceil(it.file.size/1024)} KB</div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="p-2 border-t border-slate-200">
+                      <input
+                        value={it.caption}
+                        onChange={(e) => {
+                          const next = [...previewItems];
+                          next[idx] = { ...next[idx], caption: e.target.value };
+                          setPreviewItems(next);
+                        }}
+                        placeholder="Add a caption"
+                        className="w-full text-sm px-2 py-1.5 border border-slate-200 rounded-md outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-slate-200 bg-slate-50">
+              <button onClick={closePreview} className="px-3 py-2 rounded-md text-slate-700 hover:bg-slate-200">Cancel</button>
+              <button onClick={confirmSendPreview} className="px-4 py-2 rounded-md text-white bg-blue-600 hover:bg-blue-700 shadow-sm">Send {previewItems.length}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Viewers modal overlay */}
       {openViewerKey && (
         <div onClick={() => setOpenViewerKey(null)} className="fixed inset-0 bg-black/35 flex items-center justify-center z-50">
           <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg max-h-[80vh] overflow-auto bg-white rounded-xl shadow-2xl mx-4">
             <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200">
-              <div className="font-bold text-slate-900">Viewed by</div>
+              <div className="text-[1.2rem] font-bold text-slate-900">Viewed by</div>
               <button onClick={() => setOpenViewerKey(null)} className="p-1 text-slate-700 hover:text-slate-900" aria-label="Close">✕</button>
             </div>
             <div className="p-2">
               {viewerList.length === 0 ? (
-                <div className="p-4 text-slate-500 text-sm">No viewers yet</div>
+                <div className="text-[1rem] p-4 text-slate-500 text-sm">No viewers yet</div>
               ) : (
                 viewerList.map(v => (
                   <div key={`${v.userId}-${toMs(v.lastReadAt)}`} className="flex items-center gap-3 px-2 py-2 border-b last:border-b-0 border-slate-100">
-                    <img src={(v.user && v.user.avatar) ? v.user.avatar : `https://i.pravatar.cc/100?u=${encodeURIComponent(v.userId)}`} alt={v.user?.name || v.userId} className="w-9 h-9 rounded-full object-cover ring-1 ring-slate-200" />
+                    <img src={(v.user && v.user.avatar) ? v.user.avatar : `https://i.pravatar.cc/100?u=${encodeURIComponent(v.userId)}`} alt={v.user?.name || v.userId} className="w-9 h-9 rounded-lg object-cover ring-1 ring-slate-200" />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-slate-900 truncate">{v.user?.name || v.userId}</div>
+                      <div className="text-[1rem] text-sm font-semibold text-slate-900 truncate">{v.user?.name || v.userId}</div>
                     </div>
-                    <div className="text-xs text-slate-500">{viewedAtLabel(v.lastReadAt)}</div>
+                    <div className="text-[1rem] text-xs text-slate-500">{viewedAtLabel(v.lastReadAt)}</div>
                   </div>
                 ))
               )}
@@ -319,7 +548,20 @@ export default function ChatRoom() {
           </div>
         </div>
       )}
-      <div className="flex gap-2 p-5 border-t border-slate-200 bg-white">
+      <div className="flex items-center gap-2 p-5 border-t border-slate-200 bg-white">
+        {/* Attach files/photos */}
+        <button
+          title="Attach files or photos"
+          className="p-2 rounded-lg hover:bg-slate-100 text-slate-700"
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Attach"
+        >
+          <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.2a2 2 0 1 1-2.83-2.83l8.13-8.13" />
+          </svg>
+        </button>
+        <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf,application/zip,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { const files = Array.from(e.target.files || []); openPreviewWithFiles(files); e.target.value = ''; }} />
+
         <input
           value={text}
           onChange={e=>setText(e.target.value)}
@@ -327,7 +569,33 @@ export default function ChatRoom() {
           className="flex-1 px-3 py-2.5 border border-slate-300 rounded-lg text-[15px] outline-none focus:ring-2 focus:ring-blue-200 shadow-sm"
           placeholder="Nhập tin nhắn..."
         />
-        <button onClick={send} className="px-4 py-2.5 rounded-lg font-semibold text-[15px] text-white bg-blue-600 hover:bg-blue-700 shadow-sm">Gửi</button>
+        {/* Voice message */}
+        <button
+          title="Record voice message"
+          className="p-2 rounded-lg hover:bg-slate-100 text-slate-700"
+          onClick={() => alert('Voice messages not implemented yet')}
+          aria-label="Record voice"
+        >
+          <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 1a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V4a3 3 0 0 1 3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </button>
+        {/* Send */}
+        <button
+          onClick={send}
+          disabled={!text.trim()}
+          className="p-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed shadow-sm"
+          title="Send"
+          aria-label="Send"
+        >
+          <svg className="w-[22px] h-[22px] text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
       </div>
     </div>
   );

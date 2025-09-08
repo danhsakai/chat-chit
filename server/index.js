@@ -4,6 +4,7 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
+const path = require("path");
 
 const { DB, connect } = require("./db");
 const authRoutes = require("./routes/auth");
@@ -25,6 +26,11 @@ const usersRoutes = require("./routes/users");
   app.use("/api/messages", msgRoutes);
   app.use("/api/user-rooms", userRoomsRoutes);
   app.use("/api/users", usersRoutes);
+  const uploadsRoutes = require("./routes/uploads");
+  app.use("/api/uploads", uploadsRoutes);
+
+  // serve uploaded files statically
+  app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: "*" } });

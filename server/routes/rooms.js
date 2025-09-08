@@ -21,16 +21,15 @@ router.get("/", async (req, res, next) => {
 // POST /api/rooms  -> tạo phòng mới
 router.post("/", async (req, res, next) => {
   try {
-    const { name, avatar } = req.body;
+    const { name, avatar, isPrivate } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
 
     const r = DB.r,
       conn = DB.conn;
     const now = r.now();
-    const result = await r
-      .table("rooms")
-      .insert({ name, avatar, createdAt: now })
-      .run(conn);
+    const doc = { name, createdAt: now, isPrivate: !!isPrivate };
+    if (avatar !== undefined) doc.avatar = avatar;
+    const result = await r.table("rooms").insert(doc).run(conn);
 
     // id tự sinh có trong generated_keys (theo driver JS của RethinkDB)
     const id = result.generated_keys ? result.generated_keys[0] : null;
@@ -73,11 +72,11 @@ router.get("/:id/members", async (req, res, next) => {
   }
 });
 
-// PUT /api/rooms/:id -> đổi tên phòng
+// PUT /api/rooms/:id -> cập nhật thông tin phòng (tên/avatar/quyền riêng tư)
 router.put("/:id", async (req, res, next) => {
   try {
-    const { name, avatar } = req.body;
-    if (!name && !avatar)
+    const { name, avatar, isPrivate } = req.body;
+    if (!name && avatar === undefined && isPrivate === undefined)
       return res.status(400).json({ error: "nothing to update" });
 
     const r = DB.r,
@@ -89,6 +88,7 @@ router.put("/:id", async (req, res, next) => {
         const update = {};
         if (name) update.name = name;
         if (avatar !== undefined) update.avatar = avatar;
+        if (isPrivate !== undefined) update.isPrivate = !!isPrivate;
         return update;
       })
       .run(conn);

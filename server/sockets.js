@@ -28,6 +28,12 @@ module.exports = function registerSockets(io) {
       emitPresence(roomId);
     });
 
+    // Broadcast read receipts: when a user marks a room read, notify the room
+    socket.on("user:read", ({ roomId, userId, lastReadAt }) => {
+      if (!roomId || !userId) return;
+      io.to(roomId).emit("room:read", { roomId, userId, lastReadAt });
+    });
+
     // allow clients to request current presence for a room
     socket.on("presence:get", ({ roomId }) => {
       if (!roomId) return;
