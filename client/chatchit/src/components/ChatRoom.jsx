@@ -277,7 +277,7 @@ export default function ChatRoom() {
 
           return (
             <div key={m.id || `${m.roomId}-${m.createdAt}-${m.userId}`}
-              className={`mb-3 flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+              className={`mb-2 flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
               {mine ? (
                 <>
                   {Bubble}
