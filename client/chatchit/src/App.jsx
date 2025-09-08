@@ -1,7 +1,7 @@
 // client/src/App.jsx
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { setRooms, setCurrentRoom } from './store';
+import { setRooms, setCurrentRoom, setAuth, logout } from './store';
 import ChatRoom from './components/ChatRoom';
 import Login from './components/Login';
 
@@ -13,29 +13,48 @@ export default function App() {
   const current = useSelector(s => s.rooms.current);
   const user = useSelector(s => s.auth.user);
 
-  // Nếu chưa đăng nhập thì hiển thị Login
-  if (!user) return <Login />;
+  // Luôn gọi các hook trước khi return
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token && !user) {
+      fetch(`${API}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.user) dispatch(setAuth({ user: data.user, token }));
+          else dispatch(logout());
+        })
+        .catch(() => dispatch(logout()));
+    }
+  }, [dispatch, user]);
 
   useEffect(() => {
+    if (!user) return;
     (async () => {
       try {
-        // 1) Lấy danh sách phòng
-        const res = await fetch(`${API}/api/rooms`);
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API}/api/rooms`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
         const list = await res.json();
 
         if (Array.isArray(list) && list.length) {
           dispatch(setRooms(list));
-          // 2) Nếu chưa chọn phòng, tự chọn phòng đầu tiên
           if (!current) dispatch(setCurrentRoom(list[0].id));
         } else {
-          // 3) Nếu chưa có phòng nào, tạo "General" rồi tải lại
           const cr = await fetch(`${API}/api/rooms`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
             body: JSON.stringify({ name: 'General' })
           });
           const { id } = await cr.json();
-          const res2 = await fetch(`${API}/api/rooms`);
+          const res2 = await fetch(`${API}/api/rooms`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
           const list2 = await res2.json();
           dispatch(setRooms(list2));
           dispatch(setCurrentRoom(id || list2[0]?.id));
@@ -44,7 +63,10 @@ export default function App() {
         console.error('Load rooms failed:', e);
       }
     })();
-  }, [dispatch]); // không phụ thuộc current để tránh vòng lặp
+  }, [dispatch, user]);
+
+  // Sau khi gọi hook, mới kiểm tra user để return giao diện
+  if (!user) return <Login />;
 
   // Fallback khi rooms rỗng: chỉ hiển thị nút tạo nhanh
   const safeRooms = rooms?.length ? rooms : [];
@@ -83,7 +105,16 @@ export default function App() {
             </li>
           ))}
         </ul>
-        {!safeRooms.length && <p style={{color:'#888'}}>Đang tạo phòng mặc định…</p>}
+        <div style={{marginTop:16, display:'flex', flexDirection:'column', gap:8}}>
+          <span style={{color:'#555', fontSize:15}}>Xin chào, <b>{user?.name || user?.id}</b></span>
+          <button
+            onClick={() => {
+              localStorage.removeItem('token');
+              dispatch(logout());
+            }}
+            style={{padding:'10px 14px', borderRadius:6, border:'none', background:'#f44336', color:'#fff', fontWeight:600, cursor:'pointer'}}
+          >Đăng xuất</button>
+        </div>
       </aside>
       <main style={{background:'#f7f8fa'}}><ChatRoom /></main>
     </div>

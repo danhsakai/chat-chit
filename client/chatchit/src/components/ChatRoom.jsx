@@ -9,6 +9,7 @@ export default function ChatRoom() {
   const roomId = useSelector(s => s.rooms.current);
   const messages = useSelector(s => s.messages.byRoom[roomId] || []);
   const [text, setText] = useState('');
+  const user = useSelector(s => s.auth.user);
 
   useEffect(() => {
     if (!roomId) return;
@@ -24,7 +25,7 @@ export default function ChatRoom() {
     await fetch(`http://localhost:4000/api/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, userId: 'u1', text })
+      body: JSON.stringify({ roomId, userId: user?.id, text })
     });
     setText('');
   };
