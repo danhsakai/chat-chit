@@ -44,9 +44,9 @@ const r = require("rethinkdb");
 
   // Sample users
   const users = [
-    { id: "alice", username: "alice", password: "alice" },
-    { id: "bob", username: "bob", password: "bob" },
-    { id: "charlie", username: "charlie", password: "charlie" },
+    { id: "alice", username: "alice", password: "alice", avatar: "https://i.pravatar.cc/100?img=5" },
+    { id: "bob", username: "bob", password: "bob", avatar: "https://i.pravatar.cc/100?img=6" },
+    { id: "charlie", username: "charlie", password: "charlie", avatar: "https://i.pravatar.cc/100?img=7" },
   ];
   await db.table("users").insert(users).run(conn);
 

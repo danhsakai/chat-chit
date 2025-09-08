@@ -167,7 +167,7 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-screen bg-slate-50 [grid-template-columns:80px_300px_340px_1fr]">
+    <div className="grid h-screen bg-slate-50 [grid-template-columns:80px_300px_1fr_340px]">
       {/* Vertical icon sidebar */}
       <nav className="flex h-full flex-col items-center bg-[#202022] border-r border-black/20 py-3">
         {/* Top: logo .png placeholder */}
@@ -417,17 +417,17 @@ export default function App() {
         
       </aside>
 
-      {/* Column 2: Placeholder (to be defined later) */}
+      {/* Column 3: Chat content (moved before placeholder) */}
+      <main className="bg-slate-50">
+        <ChatRoom />
+      </main>
+
+      {/* Column 4: Placeholder (moved after chat) */}
       <section className="border-r border-slate-200 bg-white p-4 text-slate-600">
         <div className="h-full w-full flex items-center justify-center">
           <span className="text-sm">Cột trung gian — sẽ thiết kế sau</span>
         </div>
       </section>
-
-      {/* Column 3: Chat content */}
-      <main className="bg-slate-50">
-        <ChatRoom />
-      </main>
     </div>
   );
 }

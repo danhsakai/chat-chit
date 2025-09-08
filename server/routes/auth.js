@@ -17,7 +17,9 @@ router.post("/register", async (req, res) => {
     .insert({ id: username, username, password })
     .run(DB.conn);
   const token = jwt.sign({ id: username }, SECRET, { expiresIn: "7d" });
-  res.json({ token, user: { id: username, name: username } });
+  // Fetch full profile
+  const user = await r.table("users").get(username).run(DB.conn);
+  res.json({ token, user: { id: username, name: user.username, avatar: user.avatar || null } });
 });
 
 // Đăng nhập
@@ -29,7 +31,7 @@ router.post("/login", async (req, res) => {
   if (!user || user.password !== password)
     return res.status(401).json({ error: "Sai username hoặc password" });
   const token = jwt.sign({ id: username }, SECRET, { expiresIn: "7d" });
-  res.json({ token, user: { id: username, name: username } });
+  res.json({ token, user: { id: username, name: user.username, avatar: user.avatar || null } });
 });
 
 // Lấy thông tin user từ token
@@ -46,7 +48,7 @@ router.get("/me", async (req, res) => {
     const { DB } = require("../db");
     const user = await r.table("users").get(payload.id).run(DB.conn);
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ user: { id: user.id, name: user.username } });
+    res.json({ user: { id: user.id, name: user.username, avatar: user.avatar || null } });
   } catch (e) {
     res.status(401).json({ error: "Invalid token" });
   }

@@ -11,6 +11,7 @@ const roomRoutes = require("./routes/rooms");
 const msgRoutes = require("./routes/messages");
 const registerSockets = require("./sockets");
 const userRoomsRoutes = require("./routes/userRooms");
+const usersRoutes = require("./routes/users");
 
 (async () => {
   await connect();
@@ -23,6 +24,7 @@ const userRoomsRoutes = require("./routes/userRooms");
   app.use("/api/rooms", roomRoutes);
   app.use("/api/messages", msgRoutes);
   app.use("/api/user-rooms", userRoomsRoutes);
+  app.use("/api/users", usersRoutes);
 
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: "*" } });

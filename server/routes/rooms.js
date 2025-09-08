@@ -53,6 +53,26 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
+// GET /api/rooms/:id/members -> return member count inferred from userRooms
+router.get("/:id/members", async (req, res, next) => {
+  try {
+    const r = DB.r,
+      conn = DB.conn;
+    const roomId = req.params.id;
+    // Count distinct users that have a userRooms row for this room
+    const cursor = await r
+      .table("userRooms")
+      .filter({ roomId })
+      .pluck("userId")
+      .run(conn);
+    const list = await cursor.toArray();
+    const set = new Set(list.map((x) => x.userId));
+    res.json({ memberCount: set.size });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // PUT /api/rooms/:id -> đổi tên phòng
 router.put("/:id", async (req, res, next) => {
   try {

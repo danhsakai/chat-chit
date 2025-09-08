@@ -85,4 +85,22 @@ router.put("/read", async (req, res, next) => {
   }
 });
 
+// GET /api/user-rooms/room/:roomId -> list of read states for all users in a room
+router.get("/room/:roomId", async (req, res, next) => {
+  try {
+    const r = DB.r,
+      conn = DB.conn;
+    const { roomId } = req.params;
+    const cursor = await r
+      .table("userRooms")
+      .filter({ roomId })
+      .pluck("userId", "lastReadAt")
+      .run(conn);
+    const list = await cursor.toArray();
+    res.json(list);
+  } catch (e) {
+    next(e);
+  }
+});
+
 module.exports = router;
