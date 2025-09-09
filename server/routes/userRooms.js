@@ -21,15 +21,15 @@ router.get("/", async (req, res, next) => {
     const userId = getUserIdFromAuth(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const r = DB.r,
-      conn = DB.conn;
-    const roomsCursor = await r
-      .table("rooms")
-      .pluck("id", "createdAt")
+    const r = DB.r, conn = DB.conn;
+    // Compute only for rooms the user is a member of
+    const membership = await r
+      .table("roomMembers")
+      .getAll(userId, { index: "userId" })
+      .pluck("roomId")
+      .coerceTo("array")
       .run(conn);
-    const rooms = await roomsCursor.toArray();
-
-    // Load existing user-room states
+    const roomIds = membership.map((x) => x.roomId);
     const statesCursor = await r
       .table("userRooms")
       .getAll(userId, { index: "userId" })
@@ -38,23 +38,20 @@ router.get("/", async (req, res, next) => {
     const stateByRoom = Object.fromEntries(states.map((s) => [s.roomId, s]));
 
     const result = {};
-    for (const room of rooms) {
-      const st = stateByRoom[room.id];
+    for (const roomId of roomIds) {
+      const st = stateByRoom[roomId];
       const lastReadAt = st?.lastReadAt || null; // null means never read
-      let lowerBound;
-      if (lastReadAt) lowerBound = lastReadAt;
-      else lowerBound = r.minval;
-      // Count only messages from others (exclude current user's own messages)
+      const lowerBound = lastReadAt ? lastReadAt : r.minval;
       const count = await r
         .table("messages")
-        .between([room.id, lowerBound], [room.id, r.maxval], {
+        .between([roomId, lowerBound], [roomId, r.maxval], {
           index: "roomId_createdAt",
           leftBound: "open",
         })
         .filter(r.row("userId").ne(userId))
         .count()
         .run(conn);
-      result[room.id] = { lastReadAt: lastReadAt || null, unread: count };
+      result[roomId] = { lastReadAt: lastReadAt || null, unread: count };
     }
 
     res.json(result);

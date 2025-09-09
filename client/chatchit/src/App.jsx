@@ -29,6 +29,310 @@ export default function App() {
   const [avatarPreview, setAvatarPreview] = useState(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  // Right column top panel state
+  const [infoPanelOpen, setInfoPanelOpen] = useState(true);
+  // Right column bottom panel (members) state
+  const [membersOpen, setMembersOpen] = useState(true);
+  const [members, setMembers] = useState([]); // [{ userId, role }]
+  const [profileById, setProfileById] = useState({}); // id -> { id, name, avatar }
+  const [memberQuery, setMemberQuery] = useState('');
+  const [memberMenuFor, setMemberMenuFor] = useState(null); // userId or null
+  const [memberMenuPos, setMemberMenuPos] = useState({ x: 0, y: 0 });
+  const [expandedSections, setExpandedSections] = useState({
+    photos: false,
+    videos: false,
+    audio: false,
+    files: false,
+    links: false,
+    voice: false,
+  });
+
+  const toggleSection = (key) =>
+    setExpandedSections((s) => {
+      const isOpen = !!s[key];
+      const reset = { photos: false, videos: false, audio: false, files: false, links: false, voice: false };
+      if (isOpen) return reset; // collapse all if clicking the open one
+      return { ...reset, [key]: true }; // open only the clicked one
+    });
+
+  // Derived: latest media/link items for current room
+  const currentMsgs = (messagesByRoom && current) ? (messagesByRoom[current] || []) : [];
+  function toMsLocal(v) {
+    if (!v) return 0;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') return new Date(v).getTime() || 0;
+    if (v && typeof v === 'object' && v.$reql_type$ === 'TIME' && typeof v.epoch_time === 'number') return Math.floor(v.epoch_time * 1000);
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+  function extractItems(messages) {
+    const items = [];
+    for (const m of messages) {
+      const baseTime = toMsLocal(m.createdAt);
+      // Single-file style message
+      if (m && (m.url || m.fileName || m.type || m.mime)) {
+        const kind = m.type || ((m.mime || '').startsWith('image/') ? 'image' : ((m.mime || '').startsWith('video/') ? 'video' : ((m.mime || '').startsWith('audio/') ? 'audio' : 'file')));
+        items.push({
+          kind,
+          url: m.url || null,
+          fileName: m.fileName || null,
+          mime: m.mime || null,
+          createdAt: baseTime,
+        });
+      }
+      // Multi-attachment style
+      if (Array.isArray(m.attachments)) {
+        for (const a of m.attachments) {
+          if (!a) continue;
+          const kind = a.type || ((a.mime || '').startsWith('image/') ? 'image' : ((a.mime || '').startsWith('video/') ? 'video' : ((a.mime || '').startsWith('audio/') ? 'audio' : 'file')));
+          items.push({
+            kind,
+            url: a.url || null,
+            fileName: a.fileName || null,
+            mime: a.mime || null,
+            createdAt: baseTime,
+          });
+        }
+      }
+    }
+    return items;
+  }
+  const all = extractItems(currentMsgs);
+  const latestPhotos = all.filter(i => i.kind === 'image' || (i.mime || '').startsWith('image/'))
+    .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  const latestVideos = all.filter(i => i.kind === 'video' || (i.mime || '').startsWith('video/'))
+    .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  const latestAudio = all.filter(i => i.kind === 'audio' || (i.mime || '').startsWith('audio/'))
+    .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  const latestFiles = all.filter(i => !((i.kind === 'image') || (i.kind === 'video') || (i.kind === 'audio') || (i.mime || '').startsWith('image/') || (i.mime || '').startsWith('video/') || (i.mime || '').startsWith('audio/')))
+    .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  // Extract URLs in text for Links
+  function extractLinks(messages) {
+    const res = [];
+    const urlRe = /https?:\/\/[^\s]+/gi;
+    for (const m of messages) {
+      if (!m?.text) continue;
+      const ms = toMsLocal(m.createdAt);
+      const matches = (m.text.match(urlRe) || []);
+      for (const u of matches) res.push({ url: u, createdAt: ms });
+    }
+    return res.sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  }
+  const latestLinks = extractLinks(currentMsgs);
+  const latestVoice = all.filter(i => i.kind === 'voice')
+    .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+
+  // Current room info and role helpers
+  const currentRoomObj = (rooms || []).find(r => r.id === current) || null;
+  const isDirectChat = !!currentRoomObj?.isPrivate && (members?.length === 2);
+  const myRole = (() => {
+    const meId = String(user?.id || '');
+    const me = (members || []).find(m => String(m.userId) === meId);
+    return me?.role || 'member';
+  })();
+
+  // Load member list for current room
+  useEffect(() => {
+    if (!current) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/rooms/${current}/member-list`);
+        const list = await res.json();
+        if (Array.isArray(list) && list.length) {
+          setMembers(list);
+          return;
+        }
+      } catch (_) {
+        // ignore and fallback
+      }
+      // Fallback: derive members from activity if API returns nothing
+      try {
+        const set = new Set();
+        const msgs = messagesByRoom[current] || [];
+        for (const m of msgs) if (m?.userId) set.add(String(m.userId));
+        const readMap = readByRoom[current] || {};
+        for (const uid of Object.keys(readMap)) if (uid) set.add(String(uid));
+        if (user?.id) set.add(String(user.id));
+        const derived = Array.from(set).map((userId) => ({ userId, role: 'member' }));
+        setMembers(derived);
+      } catch (_) {
+        setMembers([]);
+      }
+    })();
+  }, [current, messagesByRoom, readByRoom, user]);
+
+  // Ensure user profiles for members
+  useEffect(() => {
+    const ids = Array.from(new Set((members || []).map(m => m.userId))).filter(Boolean);
+    const missing = ids.filter(id => !profileById[id]);
+    if (!missing.length) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/users?ids=${encodeURIComponent(missing.join(','))}`);
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          const map = { ...profileById };
+          for (const u of list) map[u.id] = { id: u.id, name: u.name || u.username || u.id, avatar: u.avatar || null };
+          setProfileById(map);
+        }
+      } catch (_) { /* ignore */ }
+    })();
+  }, [members]);
+
+  // Compute per-user status using read receipts for this room
+  const readMap = readByRoom[current] || {};
+  function statusLabelFor(uid) {
+    const ts = readMap[uid];
+    const ms = toMs(ts);
+    if (ms) {
+      const diff = Date.now() - ms;
+      if (diff <= 2 * 60 * 1000) return 'Online';
+      return `${timeAgo(ms)} ago`;
+    }
+    return 'Offline';
+  }
+
+  function lastSeenMsFor(uid) {
+    const ts = readMap[uid];
+    const ms = toMs(ts);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function statusRankFor(uid) {
+    const ms = lastSeenMsFor(uid);
+    if (!ms) return 2; // offline/unknown
+    const diff = Date.now() - ms;
+    if (diff <= 2 * 60 * 1000) return 0; // online
+    return 1; // recently active
+  }
+
+  const membersView = (members || []).map(m => {
+    const p = profileById[m.userId] || { id: m.userId, name: m.userId, avatar: null };
+    const isAdmin = (m.role === 'owner' || m.role === 'admin');
+    const lastSeenMs = lastSeenMsFor(m.userId);
+    const statusRank = statusRankFor(m.userId);
+    return { ...m, name: p.name, avatar: p.avatar, status: statusLabelFor(m.userId), isAdmin, lastSeenMs, statusRank };
+  });
+
+  const memberQ = (memberQuery || '').trim().toLowerCase();
+  const membersFiltered = memberQ
+    ? membersView.filter(m => (m.name || '').toLowerCase().includes(memberQ) || (m.userId || '').toLowerCase().includes(memberQ))
+    : membersView;
+  const membersSorted = [...membersFiltered].sort((a, b) => {
+    // Admins first
+    if (a.isAdmin !== b.isAdmin) return a.isAdmin ? -1 : 1;
+    // Status rank: online (0), recent (1), offline (2)
+    if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+    // More recent lastSeen first
+    if (a.lastSeenMs !== b.lastSeenMs) return (b.lastSeenMs || 0) - (a.lastSeenMs || 0);
+    // Name ascending
+    const an = (a.name || a.userId || '').toLowerCase();
+    const bn = (b.name || b.userId || '').toLowerCase();
+    if (an < bn) return -1;
+    if (an > bn) return 1;
+    return 0;
+  });
+
+  // Close member context menu on any document click
+  useEffect(() => {
+    const onDocClick = () => setMemberMenuFor(null);
+    window.addEventListener('click', onDocClick);
+    return () => window.removeEventListener('click', onDocClick);
+  }, []);
+
+  async function removeMemberFromRoom(uid) {
+    if (!current || !uid) return;
+    if (isDirectChat) return;
+    try {
+      if (!window.confirm('Remove this member from the group?')) return;
+      await fetch(`${API}/api/rooms/${current}/members/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+      setMembers((prev) => prev.filter((m) => String(m.userId) !== String(uid)));
+    } catch (_) {}
+  }
+
+  async function makeAdmin(uid) {
+    if (!current || !uid) return;
+    if (isDirectChat) return;
+    try {
+      if (!window.confirm('Transfer admin to this member? You will lose admin rights.')) return;
+      await fetch(`${API}/api/rooms/${current}/members/${encodeURIComponent(uid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'admin' })
+      });
+      const meId = String(user?.id || '');
+      setMembers((prev) => prev.map((m) => {
+        if (String(m.userId) === String(uid)) return { ...m, role: 'admin' };
+        if (String(m.userId) === meId) return { ...m, role: 'member' };
+        // Ensure only one admin remains
+        if (m.role === 'admin') return { ...m, role: 'member' };
+        return m;
+      }));
+    } catch (_) {}
+  }
+
+  async function makeVice(uid) {
+    if (!current || !uid) return;
+    if (isDirectChat) return;
+    try {
+      const currentIsVice = (members || []).some(m => String(m.userId) === String(uid) && m.role === 'vice');
+      const viceCount = (members || []).filter(m => m.role === 'vice' && String(m.userId) !== String(uid)).length;
+      if (!currentIsVice && viceCount >= 3) {
+        window.alert('This group already has the maximum of 3 vice members.');
+        return;
+      }
+      if (!window.confirm('Grant vice role to this member?')) return;
+      await fetch(`${API}/api/rooms/${current}/members/${encodeURIComponent(uid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'vice' })
+      });
+      setMembers((prev) => prev.map((m) => (String(m.userId) === String(uid) ? { ...m, role: 'vice' } : m)));
+    } catch (_) {}
+  }
+
+  async function removeVice(uid) {
+    if (!current || !uid) return;
+    if (isDirectChat) return;
+    try {
+      if (!window.confirm('Remove vice role from this member?')) return;
+      await fetch(`${API}/api/rooms/${current}/members/${encodeURIComponent(uid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'member' })
+      });
+      setMembers((prev) => prev.map((m) => (String(m.userId) === String(uid) ? { ...m, role: 'member' } : m)));
+    } catch (_) {}
+  }
+
+  async function sendDirectMessage(uid) {
+    if (!uid) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/rooms/direct`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ targetId: uid })
+      });
+      if (!res.ok) throw new Error('Failed to open DM');
+      const room = await res.json();
+      // Refresh rooms, join and switch to the DM
+      const resList = await fetch(`${API}/api/rooms`);
+      const list = await resList.json();
+      if (Array.isArray(list)) {
+        dispatch(setRooms(list));
+        if (room?.id) {
+          socket.emit('joinRoom', { roomId: room.id });
+          dispatch(setCurrentRoom(room.id));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   const closeCreateModal = () => {
     if (avatarPreview) URL.revokeObjectURL(avatarPreview);
@@ -81,30 +385,8 @@ export default function App() {
             } catch (_) {}
           }
         } else {
-          const cr = await fetch(`${API}/api/rooms`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { Authorization: `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify({ name: 'General' })
-          });
-          const { id } = await cr.json();
-          const res2 = await fetch(`${API}/api/rooms`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {}
-          });
-          const list2 = await res2.json();
-          dispatch(setRooms(list2));
-          list2.forEach((r) => socket.emit('joinRoom', { roomId: r.id }));
-          dispatch(setCurrentRoom(id || list2[0]?.id));
-          // Preload read states for newly created/loaded rooms
-          for (const r of list2) {
-            try {
-              const resRS = await fetch(`${API}/api/user-rooms/room/${r.id}`);
-              const states = await resRS.json();
-              if (Array.isArray(states)) dispatch(setRoomReadStates({ roomId: r.id, states }));
-            } catch (_) {}
-          }
+          // No rooms for this user yet; do not auto-create. Keep empty until user joins/creates.
+          dispatch(setRooms([]));
         }
       } catch (e) {
         console.error('Load rooms failed:', e);
@@ -219,7 +501,7 @@ export default function App() {
   }
 
   return (
-    <div className="p-2 grid h-screen min-h-0 bg-[#202022] [grid-template-columns:60px_300px_1fr_340px]">
+    <div className="p-2 grid h-screen min-h-0 bg-[#202022] [grid-template-columns:60px_300px_1fr_370px]">
       {/* Vertical icon sidebar */}
       <nav className="flex h-full flex-col items-center bg-[#202022] border-r border-black/20 py-3 pl-0 pr-2">
         {/* Top: logo .png placeholder */}
@@ -536,10 +818,374 @@ export default function App() {
         <ChatRoom />
       </main>
 
-      {/* Column 4: Placeholder (moved after chat) */}
-      <section className="border-r border-slate-200 bg-white p-4 text-slate-600">
-        <div className="h-full w-full flex items-center justify-center">
-          <span className="text-sm">Cột trung gian — sẽ thiết kế sau</span>
+      {/* Column 4: Split into two equal rows */}
+      <section className="px-4 py-0 text-slate-600">
+        <div
+          className="h-full grid grid-rows-2 gap-4"
+          style={{
+            gridTemplateRows: !membersOpen
+              ? '1fr 0fr'
+              : ((expandedSections.photos || expandedSections.videos || expandedSections.audio || expandedSections.files || expandedSections.links || expandedSections.voice)
+                ? '2fr 1fr'
+                : '1fr 1fr')
+          }}
+        >
+          {/* Top panel: Group info + Files */}
+          <div className="rounded-4xl bg-[#f9fafc] overflow-hidden flex flex-col min-h-0 p-2.5">
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 py-2">
+              <h3 className="text-3xl font-semibold text-slate-800">Group info</h3>
+              <button
+                type="button"
+                aria-label={infoPanelOpen ? 'Close panel' : 'Open panel'}
+                onClick={() => setInfoPanelOpen(v => !v)}
+                className="p-1 text-slate-500 hover:text-slate-700"
+              >
+                {/* X icon */}
+                {infoPanelOpen ? (
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                ) : (
+                  // Plus icon when closed
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            {/* Content */}
+            {infoPanelOpen ? (
+              <div className="flex-1 min-h-0 overflow-hidden px-3 py-2">
+                {/* File title */}
+                <div className="text-2xl font-bold tracking-wid mb-2">File</div>
+
+                <ul className="space-y-1">
+                  {/* Photos */}
+                  <li>
+                    <button
+                      type="button"
+                      aria-expanded={expandedSections.photos}
+                      onClick={() => toggleSection('photos')}
+                      className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1"
+                    >
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* Photo icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+                          <circle cx="9" cy="9" r="2" />
+                          <path d="M21 15l-5-5-4 4-2-2-5 5" />
+                        </svg>
+                        <span className="text-base">{latestPhotos.length} photos</span>
+                      </span>
+                      {/* Chevron */}
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.photos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.photos && (
+                      <div className="pb-3 max-h-64 overflow-auto pr-1">
+                        {latestPhotos.length === 0 ? (
+                          <div className="text-base text-slate-500">No photos</div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-2">
+                            {latestPhotos.map((ph, idx) => (
+                              ph.url ? (
+                                <img key={idx} src={ph.url} alt={ph.fileName || 'photo'} className="aspect-square w-full h-full object-cover rounded-md bg-slate-100" />
+                              ) : (
+                                <div key={idx} className="aspect-square rounded-md bg-slate-100" />
+                              )
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+
+                  {/* Video */}
+                  <li>
+                    <button type="button" aria-expanded={expandedSections.videos} onClick={() => toggleSection('videos')} className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1">
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* Video icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M15 10l4-2v8l-4-2" />
+                          <rect x="3" y="6" width="12" height="12" rx="2" />
+                        </svg>
+                        <span className="text-base">{latestVideos.length} videos</span>
+                      </span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.videos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.videos && (
+                      <div className="pb-1 max-h-64 overflow-auto pr-1">
+                        {latestVideos.length === 0 ? (
+                          <div className="text-base text-slate-500">No videos</div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {latestVideos.map((v, idx) => (
+                              <div key={idx} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50">
+                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M15 10l4-2v8l-4-2"/><rect x="3" y="6" width="12" height="12" rx="2"/></svg>
+                                <span className="text-sm text-slate-800 truncate max-w-[220px]">{v.fileName || (v.mime || 'video')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+
+                  {/* Audio */}
+                  <li>
+                    <button type="button" aria-expanded={expandedSections.audio} onClick={() => toggleSection('audio')} className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1">
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* Audio icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M9 18V5l12-2v13" />
+                          <circle cx="6" cy="18" r="3" />
+                          <circle cx="18" cy="16" r="3" />
+                        </svg>
+                        <span className="text-base">{latestAudio.length} audio</span>
+                      </span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.audio ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.audio && (
+                      <div className="pb-1 max-h-64 overflow-auto pr-1">
+                        {latestAudio.length === 0 ? (
+                          <div className="text-sm text-slate-500">No audio files</div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {latestAudio.map((a, idx) => (
+                              <div key={idx} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50">
+                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                                <span className="text-sm text-slate-800 truncate max-w-[220px]">{a.fileName || (a.mime || 'audio')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+
+                  {/* Files */}
+                  <li>
+                    <button type="button" aria-expanded={expandedSections.files} onClick={() => toggleSection('files')} className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1">
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* File icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                        </svg>
+                        <span className="text-base">{latestFiles.length} files</span>
+                      </span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.files ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.files && (
+                      <div className="pb-1 max-h-64 overflow-auto pr-1">
+                        {latestFiles.length === 0 ? (
+                          <div className="text-sm text-slate-500">No files</div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {latestFiles.map((f, idx) => (
+                              <div key={idx} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50">
+                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                                <span className="text-sm text-slate-800 truncate max-w-[220px]">{f.fileName || (f.mime || 'file')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+
+                  {/* Links */}
+                  <li>
+                    <button type="button" aria-expanded={expandedSections.links} onClick={() => toggleSection('links')} className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1">
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* Link icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1" />
+                          <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1" />
+                        </svg>
+                        <span className="text-base">{latestLinks.length} links</span>
+                      </span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.links ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.links && (
+                      <div className="pb-1 max-h-64 overflow-auto pr-1">
+                        {latestLinks.length === 0 ? (
+                          <div className="text-sm text-slate-500">No links</div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {latestLinks.map((l, idx) => (
+                              <a key={idx} href={l.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-blue-700 hover:underline truncate">
+                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1"/><path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"/></svg>
+                                <span className="text-sm truncate max-w-[240px]">{l.url}</span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+
+                  {/* Voice message */}
+                  <li>
+                    <button type="button" aria-expanded={expandedSections.voice} onClick={() => toggleSection('voice')} className="w-full flex items-center justify-between py-2 hover:bg-slate-50 rounded-md px-1">
+                      <span className="flex items-center gap-2 text-slate-800">
+                        {/* Mic icon */}
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <rect x="9" y="2" width="6" height="11" rx="3" />
+                          <path d="M5 10a7 7 0 0 0 14 0" />
+                          <path d="M12 19v3" />
+                        </svg>
+                        <span className="text-base">{latestVoice.length} voice messages</span>
+                      </span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 transition-transform ${expandedSections.voice ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {expandedSections.voice && (
+                      <div className="pb-1 max-h-64 overflow-auto pr-1">
+                        {latestVoice.length === 0 ? (
+                          <div className="text-sm text-slate-500">No voice messages</div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {latestVoice.map((v, idx) => (
+                              <div key={idx} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50">
+                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg>
+                                <span className="text-sm text-slate-800 truncate max-w-[220px]">{v.fileName || 'Voice message'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                </ul>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-sm text-slate-500">Panel hidden</div>
+            )}
+          </div>
+
+          {/* Bottom panel: Members list */}
+          <div className="rounded-4xl bg-[#dbdcfe] overflow-hidden flex flex-col min-h-0 p-2.5">
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 py-2">
+              <h3 className="text-3xl  font-semibold text-slate-800">Members {membersView.length}</h3>
+              <button
+                type="button"
+                aria-label={membersOpen ? 'Close panel' : 'Open panel'}
+                onClick={() => setMembersOpen(v => !v)}
+                className="p-1 text-slate-500 hover:text-slate-700"
+              >
+                {membersOpen ? (
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            {membersOpen ? (
+              <div className="flex-1 min-h-0 overflow-auto px-2 py-2">
+                <div className="px-2 pb-2">
+                  <input
+                    value={memberQuery}
+                    onChange={(e) => setMemberQuery(e.target.value)}
+                    placeholder="Search members..."
+                    className="w-full rounded-md bg-[#f9fafc] px-2 py-1 text-base outline-none"
+                  />
+                </div>
+                {membersSorted.length === 0 ? (
+                  <div className="text-sm text-slate-500 px-1 py-1">No members</div>
+                ) : (
+                  <ul className="space-y-1">
+                    {membersSorted.map((m) => (
+                      <li
+                        key={m.userId}
+                        className="relative flex items-center gap-3 px-2 py-2 rounded hover:bg-slate-50"
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setMemberMenuFor(m.userId);
+                          setMemberMenuPos({ x: e.clientX, y: e.clientY });
+                        }}
+                      >
+                        <img
+                          src={m.avatar || `https://i.pravatar.cc/100?u=${encodeURIComponent(m.userId)}`}
+                          alt={m.name || m.userId}
+                          className="w-9 h-9 rounded-lg object-cover"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-base font-semibold text-slate-900 truncate">{m.name || m.userId}</div>
+                          <div className="text-sm text-slate-500 truncate">{m.status}</div>
+                        </div>
+                        {m.role === 'vice' ? (
+                          <span className="text-xs font-medium text-slate-700">Vice</span>
+                        ) : (m.role === 'owner' || m.role === 'admin') ? (
+                          <span className="text-xs font-medium text-slate-700">Admin</span>
+                        ) : null}
+                        {memberMenuFor === m.userId ? (
+                          <div
+                            className="fixed z-50 w-44 rounded-md bg-white shadow-lg ring-1 ring-black/5"
+                            style={{ left: `${memberMenuPos.x}px`, top: `${memberMenuPos.y}px` }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {(myRole === 'admin' && !isDirectChat && String(m.userId) !== String(user?.id)) && (
+                              <>
+                                <button
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50"
+                                  onClick={(e) => { e.stopPropagation(); setMemberMenuFor(null); removeMemberFromRoom(m.userId); }}
+                                >Remove from group</button>
+                                <button
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50"
+                                  onClick={(e) => { e.stopPropagation(); setMemberMenuFor(null); makeAdmin(m.userId); }}
+                                >Give admin rights</button>
+                                {m.role === 'vice' ? (
+                                  <button
+                                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50"
+                                    onClick={(e) => { e.stopPropagation(); setMemberMenuFor(null); removeVice(m.userId); }}
+                                  >Remove vice</button>
+                                ) : (
+                                  <button
+                                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50"
+                                    onClick={(e) => { e.stopPropagation(); setMemberMenuFor(null); makeVice(m.userId); }}
+                                  >Make vice</button>
+                                )}
+                              </>
+                            )}
+                            {String(m.userId) !== String(user?.id) && (
+                              <button
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50"
+                                onClick={(e) => { e.stopPropagation(); setMemberMenuFor(null); sendDirectMessage(m.userId); }}
+                              >Send message</button>
+                            )}
+                          </div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-sm text-slate-500">Panel hidden</div>
+            )}
+          </div>
         </div>
       </section>
 
