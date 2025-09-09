@@ -93,7 +93,7 @@ router.get("/room/:roomId", async (req, res, next) => {
     const { roomId } = req.params;
     const cursor = await r
       .table("userRooms")
-      .filter({ roomId })
+      .getAll(roomId, { index: "roomId" })
       .pluck("userId", "lastReadAt")
       .run(conn);
     const list = await cursor.toArray();

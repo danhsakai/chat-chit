@@ -1,5 +1,21 @@
 // server/scripts/seed.js
 const r = require("rethinkdb");
+const crypto = require("crypto");
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const iterations = 150000; // reasonably strong without being too slow
+  const keylen = 32;
+  const digest = "sha256";
+  const hash = crypto
+    .pbkdf2Sync(password, salt, iterations, keylen, digest)
+    .toString("hex");
+  return {
+    passwordHash: hash,
+    passwordSalt: salt,
+    passwordAlgo: `pbkdf2:${digest}:${iterations}:${keylen}`,
+  };
+}
 
 (async () => {
   const reset =
@@ -7,7 +23,15 @@ const r = require("rethinkdb");
   const conn = await r.connect({ host: "localhost", port: 28015 });
   const dbName = "chatapp";
   const db = r.db(dbName);
-  const tables = ["users", "rooms", "messages", "userRooms"];
+  // Base tables + new tables for uploads tracking and room memberships
+  const tables = [
+    "users",
+    "rooms",
+    "messages",
+    "userRooms", // per-user lastReadAt state
+    "uploads", // track uploaded files metadata for auditing/security
+    "roomMembers", // explicit membership list (useful for private rooms/roles)
+  ];
 
   // create db
   const dbs = await r.dbList().run(conn);
@@ -27,12 +51,37 @@ const r = require("rethinkdb");
       .run(conn);
     await db.table("messages").indexWait("roomId_createdAt").run(conn);
   }
+  if (!msgIdx.includes("userId")) {
+    await db.table("messages").indexCreate("userId").run(conn);
+    await db.table("messages").indexWait("userId").run(conn);
+  }
+  if (!msgIdx.includes("clientId")) {
+    await db.table("messages").indexCreate("clientId").run(conn);
+    await db.table("messages").indexWait("clientId").run(conn);
+  }
+  // Optional standalone createdAt index for generic time-based queries
+  if (!msgIdx.includes("createdAt")) {
+    await db.table("messages").indexCreate("createdAt").run(conn);
+    await db.table("messages").indexWait("createdAt").run(conn);
+  }
 
   // index for rooms.createdAt (optional but recommended)
   const roomIdx = await db.table("rooms").indexList().run(conn);
   if (!roomIdx.includes("createdAt")) {
     await db.table("rooms").indexCreate("createdAt").run(conn);
     await db.table("rooms").indexWait("createdAt").run(conn);
+  }
+  // index for rooms.name for quick lookup/uniqueness checks
+  if (!roomIdx.includes("name")) {
+    await db.table("rooms").indexCreate("name").run(conn);
+    await db.table("rooms").indexWait("name").run(conn);
+  }
+
+  // indexes for users
+  const usersIdx = await db.table("users").indexList().run(conn);
+  if (!usersIdx.includes("createdAt")) {
+    await db.table("users").indexCreate("createdAt").run(conn);
+    await db.table("users").indexWait("createdAt").run(conn);
   }
 
   // indexes for userRooms
@@ -45,6 +94,66 @@ const r = require("rethinkdb");
     await db.table("userRooms").indexCreate("userId").run(conn);
     await db.table("userRooms").indexWait("userId").run(conn);
   }
+  if (!urIdx.includes("roomId")) {
+    await db.table("userRooms").indexCreate("roomId").run(conn);
+    await db.table("userRooms").indexWait("roomId").run(conn);
+  }
+  // composite for quick lookup by (userId, roomId)
+  if (!urIdx.includes("userId_roomId")) {
+    await db
+      .table("userRooms")
+      .indexCreate("userId_roomId", [r.row("userId"), r.row("roomId")])
+      .run(conn);
+    await db.table("userRooms").indexWait("userId_roomId").run(conn);
+  }
+
+  // indexes for uploads (new)
+  const upIdx = await db
+    .table("uploads")
+    .indexList()
+    .run(conn)
+    .catch(() => []);
+  if (!upIdx.includes("roomId")) {
+    await db.table("uploads").indexCreate("roomId").run(conn);
+    await db.table("uploads").indexWait("roomId").run(conn);
+  }
+  if (!upIdx.includes("userId")) {
+    await db.table("uploads").indexCreate("userId").run(conn);
+    await db.table("uploads").indexWait("userId").run(conn);
+  }
+  if (!upIdx.includes("createdAt")) {
+    await db.table("uploads").indexCreate("createdAt").run(conn);
+    await db.table("uploads").indexWait("createdAt").run(conn);
+  }
+  if (!upIdx.includes("roomId_createdAt")) {
+    await db
+      .table("uploads")
+      .indexCreate("roomId_createdAt", [r.row("roomId"), r.row("createdAt")])
+      .run(conn);
+    await db.table("uploads").indexWait("roomId_createdAt").run(conn);
+  }
+
+  // indexes for roomMembers (new)
+  const rmIdx = await db
+    .table("roomMembers")
+    .indexList()
+    .run(conn)
+    .catch(() => []);
+  if (!rmIdx.includes("roomId")) {
+    await db.table("roomMembers").indexCreate("roomId").run(conn);
+    await db.table("roomMembers").indexWait("roomId").run(conn);
+  }
+  if (!rmIdx.includes("userId")) {
+    await db.table("roomMembers").indexCreate("userId").run(conn);
+    await db.table("roomMembers").indexWait("userId").run(conn);
+  }
+  if (!rmIdx.includes("roomId_userId")) {
+    await db
+      .table("roomMembers")
+      .indexCreate("roomId_userId", [r.row("roomId"), r.row("userId")])
+      .run(conn);
+    await db.table("roomMembers").indexWait("roomId_userId").run(conn);
+  }
 
   // Optionally clear old data only when explicitly requested
   if (reset) {
@@ -56,24 +165,36 @@ const r = require("rethinkdb");
 
   // Sample users
   const users = [
-    {
-      id: "alice",
-      username: "alice",
-      password: "alice",
-      avatar: "https://i.pravatar.cc/100?img=5",
-    },
-    {
-      id: "bob",
-      username: "bob",
-      password: "bob",
-      avatar: "https://i.pravatar.cc/100?img=6",
-    },
-    {
-      id: "charlie",
-      username: "charlie",
-      password: "charlie",
-      avatar: "https://i.pravatar.cc/100?img=7",
-    },
+    (() => {
+      const h = hashPassword("alice");
+      return {
+        id: "alice",
+        username: "alice",
+        avatar: "https://i.pravatar.cc/100?img=5",
+        createdAt: r.now(),
+        ...h,
+      };
+    })(),
+    (() => {
+      const h = hashPassword("bob");
+      return {
+        id: "bob",
+        username: "bob",
+        avatar: "https://i.pravatar.cc/100?img=6",
+        createdAt: r.now(),
+        ...h,
+      };
+    })(),
+    (() => {
+      const h = hashPassword("charlie");
+      return {
+        id: "charlie",
+        username: "charlie",
+        avatar: "https://i.pravatar.cc/100?img=7",
+        createdAt: r.now(),
+        ...h,
+      };
+    })(),
   ];
   const usersCount = await db.table("users").count().run(conn);
   if (reset || usersCount === 0) {
@@ -92,7 +213,7 @@ const r = require("rethinkdb");
     {
       name: "Dev Team",
       avatar: "https://i.pravatar.cc/100?img=2",
-      isPrivate: false,
+      isPrivate: true,
       createdAt: r.epochTime(nowSec - 43200),
     },
     {
@@ -246,6 +367,61 @@ const r = require("rethinkdb");
         ],
         { conflict: "replace" }
       )
+      .run(conn);
+  }
+
+  // Seed roomMembers data for access control (no enforcement yet in API)
+  const roomMembersCount = await db.table("roomMembers").count().run(conn);
+  if (reset || roomMembersCount === 0) {
+    const members = [];
+    for (const rm of createdRooms) {
+      // Everyone can access public rooms; for private rooms, limit to a subset
+      if (rm.isPrivate) {
+        members.push(
+          {
+            id: `alice|${rm.id}`,
+            userId: "alice",
+            roomId: rm.id,
+            role: "owner",
+            joinedAt: r.now(),
+          },
+          {
+            id: `bob|${rm.id}`,
+            userId: "bob",
+            roomId: rm.id,
+            role: "member",
+            joinedAt: r.now(),
+          }
+        );
+      } else {
+        members.push(
+          {
+            id: `alice|${rm.id}`,
+            userId: "alice",
+            roomId: rm.id,
+            role: "member",
+            joinedAt: r.now(),
+          },
+          {
+            id: `bob|${rm.id}`,
+            userId: "bob",
+            roomId: rm.id,
+            role: "member",
+            joinedAt: r.now(),
+          },
+          {
+            id: `charlie|${rm.id}`,
+            userId: "charlie",
+            roomId: rm.id,
+            role: "member",
+            joinedAt: r.now(),
+          }
+        );
+      }
+    }
+    await db
+      .table("roomMembers")
+      .insert(members, { conflict: "replace" })
       .run(conn);
   }
 

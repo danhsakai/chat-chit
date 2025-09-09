@@ -1,12 +1,13 @@
 // client/src/App.jsx
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setRooms, setCurrentRoom, setAuth, logout, setHistory, resetUnread, setLastReadAt, setUserRoomsState, setRoomReadStates } from './store';
 import ChatRoom from './components/ChatRoom';
+import SearchIcon from './components/icons/SearchIcon';
 import Login from './components/Login';
 import { socket } from './socket';
 
-const API = 'http://localhost:4000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 export default function App() {
   const dispatch = useDispatch();
@@ -19,6 +20,7 @@ export default function App() {
   const readByRoom = useSelector(s => s.rooms.readByRoom || {});
   const [selectedSidebar, setSelectedSidebar] = useState('All');
   const [query, setQuery] = useState('');
+  const searchInputRef = useRef(null);
   // Add Group modal state
   const [showEditModal, setShowEditModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
@@ -217,9 +219,9 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-screen bg-slate-50 [grid-template-columns:80px_300px_1fr_340px]">
+    <div className="p-2 grid h-screen min-h-0 bg-[#202022] [grid-template-columns:60px_300px_1fr_340px]">
       {/* Vertical icon sidebar */}
-      <nav className="flex h-full flex-col items-center bg-[#202022] border-r border-black/20 py-3">
+      <nav className="flex h-full flex-col items-center bg-[#202022] border-r border-black/20 py-3 pl-0 pr-2">
         {/* Top: logo .png placeholder */}
         <div className="w-10 h-10 rounded-xl overflow-hidden shadow ring-1 ring-black/30">
           <img
@@ -250,7 +252,7 @@ export default function App() {
                   <path d="M5 12V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7"/>
                   <path d="M2 12v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5"/>
                 </svg>
-                <span className="mt-0.5 text-[1rem] leading-none text-[#f9fafc]">All</span>
+                <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">All</span>
               </span>
             </button>
           </li>
@@ -271,7 +273,7 @@ export default function App() {
                   <svg viewBox="0 0 24 24" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.8">
                     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                   </svg>
-                  <span className="mt-0.5 text-[1rem] leading-none text-[#f9fafc]">{t}</span>
+                  <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">{t}</span>
                 </span>
               </button>
             </li>
@@ -294,7 +296,7 @@ export default function App() {
                   <path d="M5 11v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/>
                   <path d="M9 15h6"/>
                 </svg>
-                <span className="mt-0.5 text-[1rem] leading-none text-[#f9fafc]">Archive</span>
+                <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">Archive</span>
               </span>
             </button>
           </li>
@@ -319,7 +321,7 @@ export default function App() {
                 <path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5z"/>
                 <path d="M3 21a9 9 0 0 1 18 0"/>
               </svg>
-              <span className="mt-0.5 text-[1rem] leading-none text-[#f9fafc]">Profile</span>
+              <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">Profile</span>
             </span>
           </button>
           <button
@@ -337,7 +339,7 @@ export default function App() {
                 <path d="M12 20h9"/>
                 <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
               </svg>
-              <span className="mt-0.5 text-[1rem] leading-none text-[#f9fafc]">Edit</span>
+              <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">Edit</span>
             </span>
           </button>
         </div>
@@ -359,22 +361,51 @@ export default function App() {
               <path d="M17 16l4-4-4-4"/>
               <path d="M7 12h14"/>
             </svg>
-            <span className="mt-0.5 text-[1.1rem] leading-none text-[#f9fafc]">Logout</span>
+            <span className="mt-0.5 text-sm leading-none text-[#f9fafc]">Logout</span>
           </span>
         </button>
       </nav>
 
       {/* Column 1: Group list with search and previews */}
-      <aside className="border-r border-slate-200 p-4 bg-white shadow-sm flex flex-col gap-3 overflow-hidden">
+      <aside className="p-4 bg-white shadow-sm flex flex-col gap-3 overflow-hidden rounded-l-4xl">
         {/* Search bar */}
-        <div>
+        <div className="relative">
+          {/* Search icon */}
+          <SearchIcon
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"
+            color="currentColor"
+            title=""
+          />
+          
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Tìm nhóm..."
-            className="text-body w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200"
+            ref={searchInputRef}
+            className="w-full rounded-xl bg-[#dbdcfe] border border-slate-200 pl-9 pr-10 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200"
           />
+          {query ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => { setQuery(''); searchInputRef.current?.focus(); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+            >
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          ) : null}
         </div>
 
         {/* Group chat list */}
@@ -385,7 +416,7 @@ export default function App() {
             const isMine = last && last.userId === user?.id;
             const senderLabel = isMine ? 'You' : (last?.userId || '');
             let previewText;
-            if (last?.text) previewText = truncate(last.text, 60);
+            if (last?.text) previewText = truncate(last.text, 100);
             else if (Array.isArray(last?.attachments) && last.attachments.length) {
               const imgs = last.attachments.filter(a => (a?.type === 'image') || ((a?.mime || '').startsWith('image/')));
               if (imgs.length > 1) previewText = `[Photos] ${imgs.length}`;
@@ -394,7 +425,7 @@ export default function App() {
             } else if (last?.type === 'image') previewText = '[Photo]';
             else if (last?.type === 'file') previewText = `[File] ${truncate(last.fileName || '', 40)}`;
             else previewText = 'Chưa có tin nhắn';
-            const when = lastReadByRoom[r.id] || last?.createdAt || null;
+            const when = last?.createdAt || null;
             const unread = unreadByRoom[r.id] || 0;
             // Determine if my last message was seen by any other user
             let seenByOthers = false;
@@ -433,7 +464,7 @@ export default function App() {
                       }
                     } catch (_) {}
                   }}
-                className={`text-body w-full rounded-xl flex items-stretch gap-3 px-2 py-3 transition-colors ${
+                className={`w-full rounded-xl flex items-stretch gap-3 px-2 py-3 transition-colors ${
                   current === r.id ? 'bg-blue-50' : 'hover:bg-slate-50'
                 }`}
               >
@@ -442,10 +473,10 @@ export default function App() {
                     <img
                       src={r.avatar}
                       alt={r.name || 'room avatar'}
-                      className="w-10 h-10 rounded-lg object-cover ring-1 ring-slate-200"
+                      className="w-14 h-14 rounded-lg object-cover ring-1 ring-slate-200"
                     />
                   ) : (
-                    <div className="w-10 h-10 rounded-lg bg-slate-200 flex items-center justify-center text-slate-700 font-bold">
+                    <div className="w-12 h-12 rounded-lg bg-slate-200 flex items-center justify-center text-slate-700 font-bold">
                       {(r.name || '#').slice(0, 1).toUpperCase()}
                     </div>
                   )}
@@ -453,9 +484,9 @@ export default function App() {
                   {/* Middle: name + last message */}
                   <div className="min-w-0 flex-1 text-left">
                     <div className="flex items-center gap-2">
-                      <span className="text-body font-bold text-slate-900 truncate">{r.name || r.id}</span>
+                      <span className="text-lg font-bold text-slate-900 truncate">{r.name || r.id}</span>
                     </div>
-                    <div className="text-[1rem] preview-text text-slate-600 truncate">
+                    <div className="text-base text-slate-600 truncate">
                       {last ? (
                         <>
                           <span className="font-bold" style={{ color: '#7678ed' }}>{senderLabel}:</span>{' '}
@@ -469,7 +500,7 @@ export default function App() {
 
                   {/* Right: status/time and unread */}
                   <div className="flex flex-col items-end justify-between min-w-[56px]">
-                    <div className="text-[0.9rem] flex items-center gap-1 text-xs text-slate-500">
+                    <div className="text-sm flex items-center gap-1 text-slate-500">
                       {/* Status icon: single tick (sent) or double tick (seen) for my last message */}
                       {isMine ? (
                         seenByOthers ? (
@@ -488,7 +519,7 @@ export default function App() {
                       <span>{timeAgo(when)}</span>
                     </div>
                     {unread > 0 ? (
-                      <span className="mt-1 inline-flex items-center justify-center rounded-full text-[11px] min-w-[20px] h-[20px] px-1" style={{ backgroundColor: '#ff7a55', color: '#f9fafc' }}>
+                      <span className="mt-1 inline-flex items-center justify-center rounded-full text-xs min-w-[20px] h-[20px] px-1" style={{ backgroundColor: '#ff7a55', color: '#f9fafc' }}>
                         {unread}
                       </span>
                     ) : <span className="h-[20px]" />}
@@ -501,7 +532,7 @@ export default function App() {
       </aside>
 
       {/* Column 3: Chat content (moved before placeholder) */}
-      <main className="bg-slate-50">
+      <main className="bg-slate-50 pt-2 rounded-r-4xl overflow-hidden min-h-0 h-full">
         <ChatRoom />
       </main>
 

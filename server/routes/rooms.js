@@ -61,7 +61,7 @@ router.get("/:id/members", async (req, res, next) => {
     // Count distinct users that have a userRooms row for this room
     const cursor = await r
       .table("userRooms")
-      .filter({ roomId })
+      .getAll(roomId, { index: "roomId" })
       .pluck("userId")
       .run(conn);
     const list = await cursor.toArray();

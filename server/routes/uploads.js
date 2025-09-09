@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { DB } = require("../db");
 
 const router = express.Router();
 
@@ -34,6 +35,26 @@ router.put("/:roomId", async (req, res) => {
     fs.writeFileSync(filePath, buf);
 
     const url = `/uploads/${finalName}`;
+    // Store metadata in DB for auditing/searching (best-effort)
+    try {
+      const r = DB.r;
+      await r
+        .table("uploads")
+        .insert({
+          roomId,
+          // userId is unknown here; client currently does not send auth with upload
+          userId: null,
+          url,
+          fileName: fname,
+          mime,
+          size: buf.length,
+          createdAt: r.now(),
+        })
+        .run(DB.conn);
+    } catch (_) {
+      // ignore audit store failures to avoid breaking UX
+    }
+
     res.json({
       ok: true,
       url,
